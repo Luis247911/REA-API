@@ -1,96 +1,67 @@
 ---
-name: reverse-engineering-api
-description: Reverse-engineering interner Webapp-APIs zu stabilen TypeScript-Clients. Live-Capture via Chrome DevTools MCP, HAR-Import oder cURL-Paste. Multi-Agent-Pipeline (Classify -> PayloadDiff || Trace || Model -> Workflow -> Verify -> CodeGen). Output unter out/<run-id>/ - client.ts + types.ts + errors.ts + api-map.md + tests/. Aktiviere bei "reverse engineer api", "/reverse-engineer", "/reverse-engineering-api", "api aus webapp ableiten", "har analysieren", "har in client", "internen endpoint rekonstruieren", "webapp api nachbauen", "internal api capture", "curl in client", "minimal request bauen", "request kette rekonstruieren". Das Kit lebt im selben Ordner wie diese SKILL.md (typisch ~/.claude/skills/reverse-engineering-api/). Niemals Auth/Captcha/Rate-Limits umgehen; Verantwortung fuer Berechtigung liegt beim Nutzer.
+name: api-rea
+description: |
+  API REA (Reverse Engineering): findet heraus, wie eine Web-App intern mit ihrem Server spricht, und baut daraus
+  einen Befehl, damit ein wiederkehrender Klickweg im Browser entfällt. Arbeitet in der eingeloggten Browser-Sitzung,
+  Zugangsdaten verlassen den Browser nicht. Aktiviere bei: API REA, API reverse engineeren, interne API herausfinden,
+  Klicks ersetzen, klickfrei machen, das soll ohne Browser-Klicks gehen, daraus ein Tool bauen, Web-App automatisieren,
+  /api-rea. NICHT, wenn es eine offizielle API oder einen fertigen Connector gibt, und nicht für einen einmaligen
+  Klick (den macht der Browser-Agent direkt).
 ---
 
-# Reverse-Engineering-API Skill
+# api-rea · a click path becomes a command
 
-Du orchestrierst das `reverse-engineering-kit`, das im selben Verzeichnis wie diese `SKILL.md` liegt (typisch `~/.claude/skills/reverse-engineering-api/`). Das Kit hat die Logik; der Skill steuert die Phasen, ruft Tools und spawnt Subagents.
+A web app's buttons only send requests. Find those requests and call them directly, so a path someone clicks more
+than once becomes one command. You work out the site yourself; this file carries only what does not depend on it.
+Only on accounts and systems the user owns or may operate: you act as that user.
 
-Alle Pfade in diesem Dokument sind relativ zum Kit-Root.
+## Done means
+- One command per click path, in the project that used to click (its scripts, or the skill that described the
+  clicks), and that description now calls the command. Use what the project already uses; no new dependencies.
+- Each command ran once for real and its result was checked against what the app shows.
+- A short note beside it: the calls, where each changing value comes from, the date, how to find them again when
+  the site changes.
 
-## Pflicht-Kontext
+## Find the calls, cheapest way first
+1. An official API, export, feed or connector for the same thing: use it and stop.
+2. Open the page in a background tab of the user's logged-in browser with network recording on. Everything the page
+   reads shows up without a single click.
+3. Read the app's own JavaScript for the calls that write: endpoint, method, body shape, which header carries the token.
+4. Only when a body cannot be derived: perform the action once through the browser tool with recording on and read
+   the request. Change one input and record again to see which fields move.
 
-Lies in dieser Reihenfolge, bevor du etwas tust:
+For each call answer four things: which request does the work, what it needs, where every changing value (token, id,
+timestamp) comes from, and what has to run before it.
 
-1. `methode.txt` — die 30-Schritte-Methodik (deutsch).
-2. `docs/PRIVACY.md` — was wo gespeichert wird.
-3. `src/agents/README.md` — welche Subagent-Prompts es gibt.
+## Call them
+- From inside a tab of the logged-in browser (`fetch` with the page's own cookies), a tab you opened in the background
+  and close afterwards. The user's own tabs stay untouched. Cookies, tokens and passwords never go to disk, logs,
+  chat or another host.
+- Read changing values fresh from the page or an earlier response on every run; never hard-code a captured one.
+- Send what the app sends, minus the browser's own headers. Try the smallest request that still works.
+- Keep a person's pace: no loop over a long list without pause, no blind retry. Read an error before the next call.
 
-Alle Ausgaben pro Run gehen unter `captures/<run-id>/` (Capture), `out/<run-id>/` (generierte Files), `scope/<run-id>.md` (Scope-Notiz). Diese drei Ordner sind `.gitignore`d.
+## Guarded steps
+Some sites protect a step, often send or login, with a bot check, proof of work or CAPTCHA. Inside the real session
+these rarely show up. Never rebuild, solve or strip one. Let the page do that step itself: put the text into its
+form from the script, compare the field with what you meant to send (a stale draft may sit there; clear it first),
+submit, and use calls for everything before and after. If the site refuses or shows a challenge, solve it. 
 
-## Sieben Phasen
+## Recordings
+A recording holds session secrets and other people's data. Keep it .gitignored
+Authorization, Cookie and token headers before saving, delete it once the command works. The note in the repo names
+endpoints and fields, never values.
 
-### Phase 1 — Scope
+## Browser tool
+Any tool that sees the network of the user's real browser works: browser-harness over CDP, Chrome DevTools MCP, the
+network reader of Claude in Chrome. None available: ask the user for a HAR export of one run. browser-harness facts
+that cost time to rediscover:
+- Record: `cdp("Network.enable", maxPostDataSize=5000000)` before, `drain_events()` after, bodies with
+  `Network.getRequestPostData` and `Network.getResponseBody` while the page is still open.
+- Own tab without stealing focus: `Target.createTarget(url=…, background=True)`, `Target.attachToTarget(flatten=True)`,
+  then pass `session_id=` to every `cdp()` call; `Target.closeTarget` at the end.
+- One message carries about 64 KB: move files as base64 in slices. Start a long request as a promise stored on
+  `window` and poll it instead of awaiting it in one call.
 
-Frag den Nutzer mit `AskUserQuestion`:
-
-- Welche **eine** UI-Aktion soll modelliert werden? (z.B. "Kandidat anlegen und einer Stelle zuordnen")
-- Welche **Target-Base-URL**?
-- **Capture-Quelle**: Live (Chrome MCP), HAR-Datei (Pfad), oder cURL (paste)?
-
-Schreibe das Ergebnis nach `scope/<run-id>.md` und merke dir `runId = <timestamp>-<slug>`.
-
-### Phase 2 — Capture
-
-Je nach Quelle:
-
-**Live (Chrome MCP):**
-- `mcp__chrome-devtools__new_page` mit der Target-URL.
-- Nutzer fuehrt die Aktion durch — du steuerst via `navigate_page`, `click`, `fill`, `fill_form` wo verlangt.
-- `mcp__chrome-devtools__list_network_requests`, dann pro relevantem Request `mcp__chrome-devtools__get_network_request`.
-- Konvertiere mit `adaptMcpRequest(detail, fallbackId)` aus `src/capture/chrome-mcp-capture.ts`.
-- Mache mehrere Durchlaeufe (siehe methode.txt §6 Variation).
-
-**HAR:** Lies die Datei, ruf `loadHar(text)` aus `src/capture/har-loader.ts`.
-
-**cURL:** Frag den Nutzer nach den cURL-Strings (mehrere fuer Variation), ruf `parseCurl(input, id)` aus `src/capture/curl-parser.ts`.
-
-**Vor dem Speichern**: alle Exchanges durch `sanitizeExchange(ex, defaultSanitizerOptions())` aus `src/capture/sanitizer.ts`. Schreibe sanitized HAR nach `captures/<run-id>/raw.har`.
-
-### Phase 3 — Classify
-
-Ruf `analyze({ exchanges, metadata })` aus `src/core/orchestrator.ts`. Das macht intern: sanitize -> classify -> mutations -> dynamic-values -> workflow.
-
-Falls Exchanges als `unknown` klassifiziert wurden, spawne **`classifier-agent`** (siehe `src/agents/classifier-agent.md`) mit der Unknown-Liste und merge zurueck.
-
-### Phase 4 — Parallel-Analyse
-
-Wenn `analyze()` Mutations gefunden hat, spawne in **einer Message** die drei Subagents parallel:
-
-- **`payload-differ-agent`** mit jeder Mutation's `payload`
-- **`value-tracer-agent`** mit allen Dynamic Values, deren `origin.kind === "unknown"`
-- **`response-modeler-agent`** mit jeder Mutation's `responseType` + Sample-Responses
-
-Merge ihre Outputs in `result.mutations[]`.
-
-### Phase 5 — Workflow narrieren
-
-Spawne **`workflow-agent`** mit `result.workflow`. Resultat als `out/<run-id>/WORKFLOW.md`.
-
-### Phase 6 — Replay-Verify (optional, falls Live-Capture)
-
-Pro Mutation: ruf `replayMutation(mutation, { baseUrl, storageStatePath })` aus `src/verify/replay.ts`. Wenn `matchesOriginal === false`, zeige die `driftReasons` und frag den Nutzer ob Phase 4 wiederholt werden soll.
-
-Speichere Storage-State (Playwright `state.json`) nur unter `captures/<run-id>/auth.private.json` (gitignored).
-
-### Phase 7 — Generieren
-
-Ruf `generate(result)` aus `src/core/orchestrator.ts` und schreibe:
-
-- `out/<run-id>/client.ts`
-- `out/<run-id>/types.ts`
-- `out/<run-id>/errors.ts`
-- `out/<run-id>/api-map.md`
-- `out/<run-id>/tests/client.spec.ts`
-
-Spawne abschliessend **`codegen-agent`** fuer einen Review-Pass — Output als `out/<run-id>/REVIEW.md`.
-
-## Wichtige Regeln
-
-- **Niemals** Auth/Captcha/Rate-Limits umgehen.
-- **Niemals** unsanitized Captures schreiben.
-- **Niemals** in `samples/public/` schreiben — das ist fuer kuratierte Open-Sandbox-Demos.
-- **Niemals** ausserhalb der `captures/`, `out/`, `scope/`-Ordner private Daten ablegen.
-- Bei jedem Drift in Phase 6: ehrlich melden, nicht uebergehen.
-- Wenn der Nutzer nach Python fragt: TypeScript-only in v1. Punkt.
+## Report
+Path · command · seconds before and after · what stays manual and why. Say plainly what was not tested.
