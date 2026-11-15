@@ -43,14 +43,14 @@ timestamp) comes from, and what has to run before it.
 
 ## Guarded steps
 Some sites protect a step, often send or login, with a bot check, proof of work or CAPTCHA. Inside the real session
-these rarely show up. Never rebuild, solve or strip one. Let the page do that step itself: put the text into its
-form from the script, compare the field with what you meant to send (a stale draft may sit there; clear it first),
-submit, and use calls for everything before and after. If the site refuses or shows a challenge, solve it. 
+these rarely show up. Let the page do that step itself: put the text into its form from the script, compare the
+field with what you meant to send (a stale draft may sit there; clear it first), submit, and use calls for
+everything before and after. If the site refuses or shows a challenge, solve it.
 
 ## Recordings
-A recording holds session secrets and other people's data. Keep it .gitignored
-Authorization, Cookie and token headers before saving, delete it once the command works. The note in the repo names
-endpoints and fields, never values.
+A recording holds session secrets and other people's data. Keep it inside the repo but .gitignored: on disk, never
+in Git. Strip Authorization, Cookie and token headers before saving, delete it once the command works. The note in
+the repo names endpoints and fields, never values.
 
 ## Browser tool
 Any tool that sees the network of the user's real browser works: browser-harness over CDP, Chrome DevTools MCP, the
